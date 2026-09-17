@@ -523,6 +523,38 @@ much less fragile.
     `RINIT` clearing a `HashTable` `MINIT` no longer touches — isn't in
     question, just wasn't worth spending another full rebuild on.) Bumped
     `PHP_MDHTML_VERSION` to `0.1.3`, tagged `v0.1.3`.
+    **Correction (2026-09-17, same day, after a real php-wasm rebuild):**
+    the root-cause claim above — "`MD::$plugins` already relies on
+    [cross-`runStream()` persistence] not happening... and it works" — is
+    **wrong**, and so is this fix's premise. Verified two ways against the
+    actual rebuilt `php_8_5.wasm` (not the native Docker/php-fpm stand-in
+    above, which only proved the *native* build's `HashTable` is
+    correctly `MINIT`-scoped at the C level, never the real php-wasm
+    persistence question): (1) `v0.1.3`'s "fix" still loses
+    `RegisterPlugin()`/`RegisterEmoji()` registrations between two
+    separate `runStream()` calls on the same `PHP` instance, identically
+    to `v0.1.2`; (2) a plain PHP userland class static (`Foo::$store`, no
+    extension involved at all) loses its contents the exact same way.
+    `@php-wasm/universal`'s own `stream()`/`runStream()` doc comment says
+    why: every call explicitly "Resets the internal PHP state" — this
+    isn't RINIT-vs-MINIT-scoped C behavior, it's a full engine-state reset
+    on *every* call, indiscriminate of extension globals vs. userland
+    statics vs. anything else. So `kirigami/php-prepros` was never
+    actually relying on cross-`runStream()` persistence for its "register
+    plugins once at boot" model — each `runStream()` call (one page
+    render) re-triggers the whole autoload chain fresh, re-running
+    `md.plugins.php`'s `include_once` from scratch every time, which is
+    what actually makes registration "available for every page" (it reruns
+    per page, it doesn't survive between pages). Practical consequence:
+    **the `MINIT`/`MSHUTDOWN` change above doesn't fix anything real in
+    php-wasm** — within a single `runStream()` call, `RINIT`-scoping
+    (pre-`v0.1.3`) already worked identically, since registration and use
+    both happen inside that one call. It's also not harmful, and it's
+    arguably still the more correct design for a hypothetical *actually*
+    persistent SAPI — kept as-is rather than reverted, but point 3's
+    "must reproduce `MD::`'s behavior" justification for it no longer
+    holds, and this correction is the reason to trust before re-deriving
+    the same wrong conclusion from the same test setup again.
 
 ## Relationship to other repos
 
