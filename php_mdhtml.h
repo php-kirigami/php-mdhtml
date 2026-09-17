@@ -15,7 +15,7 @@
 extern zend_module_entry mdhtml_module_entry;
 #define phpext_mdhtml_ptr &mdhtml_module_entry
 
-#define PHP_MDHTML_VERSION "0.1.2"
+#define PHP_MDHTML_VERSION "0.1.3"
 
 #ifdef PHP_WIN32
 # define PHP_MDHTML_API __declspec(dllexport)
@@ -31,8 +31,6 @@ extern zend_module_entry mdhtml_module_entry;
 
 PHP_MINIT_FUNCTION(mdhtml);
 PHP_MSHUTDOWN_FUNCTION(mdhtml);
-PHP_RINIT_FUNCTION(mdhtml);
-PHP_RSHUTDOWN_FUNCTION(mdhtml);
 PHP_MINFO_FUNCTION(mdhtml);
 
 ZEND_BEGIN_MODULE_GLOBALS(mdhtml)

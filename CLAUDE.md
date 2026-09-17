@@ -461,6 +461,69 @@ much less fragile.
     build-file shape is ready once someone does it, not because the
     Windows build path is actually usable today.
 
+15. **`emoji_custom`/`plugins` moved from `RINIT`/`RSHUTDOWN` to `MINIT`/
+    `MSHUTDOWN` (2026-09-17) — the request-scoping from points 10/12 was
+    wrong for how this extension is actually used.** Found while finally
+    starting point 3's integration work in `kirigami`: registered a plugin
+    via `MDHtml\RegisterPlugin()` in one `runStream()` call against a
+    php-wasm instance, checked `MDHtml\GetRegisteredPlugins()` in a
+    *second*, separate `runStream()` call on the *same* instance — empty.
+    The registration was silently gone.
+    Root cause: `kirigami/php-prepros` renders every page of a site as its
+    own `runStream()` call against one long-lived php-wasm instance, and
+    registers plugins/emoji **once**, at boot (`md.plugins.php`'s
+    `include_once`, or a project's own `includes:` file) — never again
+    per page. That only works because `MD::$plugins`/`MD::$extraEmoji` are
+    PHP class statics, and class statics persist for the life of the
+    process/worker, not per-request (a well-known PHP characteristic, not
+    something `MD::` does deliberately). Points 10/12's `RINIT`/
+    `RSHUTDOWN` scoping was *more* conservative than that — reasonable
+    instinct for a generic PECL extension avoiding cross-tenant leakage in
+    a shared PHP-FPM worker, but it doesn't match the one thing point 3
+    requires: reproducing `MD::`'s actual behavior. Since this extension
+    has no purpose other than backing `MD::toHtml()`, matching `MD::`'s
+    real persistence semantics wins over the more conservative default.
+    **Fix**: `emoji_custom` and `plugins` now `zend_hash_init(..., 1)`
+    (persistent/malloc-backed, not request-pool `emalloc`) in `MINIT` and
+    `zend_hash_destroy()` in `MSHUTDOWN`, exactly like `emoji_builtin`
+    already worked. `RINIT`/`RSHUTDOWN` had nothing left to do and were
+    removed from `php_mdhtml.h` and the module entry (`NULL, NULL`).
+    **Why storing `plugins`' zvals (refcounted Closures) this way is safe
+    here specifically**: a zval referencing a Closure created during one
+    "request" and read back during a later one would be a dangling
+    reference in a *standard* PHP-FPM deployment, where the object heap is
+    torn down and rebuilt every request — exactly points 10/12's original
+    worry. But `MD::$plugins` (a plain userland static array holding the
+    same kind of Closure zvals) already relies on that *not* happening
+    across `runStream()` calls in php-wasm today, and it works — proving
+    php-wasm's request model doesn't actually recycle the object heap
+    between calls the way PHP-FPM does. This fix is only correct for that
+    reason, and is specific to this extension's one real deployment target
+    (backing `MD::toHtml()` inside php-wasm); it would be the wrong default
+    for a hypothetical general-purpose PECL build serving unrelated
+    PHP-FPM requests from the same worker. Not worth a build-time flag for
+    a extension with exactly one consumer.
+    Verified natively in Docker (`php:8.5-fpm` image, no Emscripten):
+    built `libcmark-gfm` + the extension inside the container (`phpize` +
+    `./configure --with-mdhtml` + `make`), then, to reproduce "one process,
+    several independent request lifecycles" without standing up a real
+    FastCGI front end, ran `php -d extension=modules/mdhtml.so -S
+    127.0.0.1:8099` (PHP's built-in dev server — single persistent
+    process, but still a genuine `php_request_startup`/`_shutdown` pair
+    per HTTP request, which is the actual mechanism at play, not just a
+    convenient stand-in) and issued two separate HTTP requests against it:
+    the first calls `RegisterPlugin('persisttest', …)` +
+    `RegisterEmoji('persistemoji', …)`; the second calls neither, only
+    `GetRegisteredPlugins()` and a render referencing both. Both requests
+    logged the same PID; the second request saw `persisttest` still
+    registered and rendered `{% persisttest %}`/`:persistemoji:` correctly
+    — confirming the fix. (Before this fix, the same test against the
+    unpatched `v0.1.2` build would have shown the second request losing
+    the registration — not re-run to confirm, since the mechanism —
+    `RINIT` clearing a `HashTable` `MINIT` no longer touches — isn't in
+    question, just wasn't worth spending another full rebuild on.) Bumped
+    `PHP_MDHTML_VERSION` to `0.1.3`, tagged `v0.1.3`.
+
 ## Relationship to other repos
 
 - **`php-wasm-compiler`** (github.com/php-kirigami/php-wasm-compiler,
@@ -546,6 +609,12 @@ out point 10's entire "still PHP-side" migration list — every
 `MD::toHtml()` post-processing step now has a C-side equivalent in
 `mdhtml.c` (~1850 lines) except the two deliberate, documented gaps below.
 Full diff-test corpus re-run, no regressions.
+
+**✅ Round 5 (2026-09-17, point 15 above): fixed `emoji_custom`/`plugins`
+being wrongly request-scoped**, found while starting the `kirigami`
+integration below — verified in Docker that registrations now survive
+across separate request lifecycles on the same process, matching
+`MD::`'s real behavior. `v0.1.3`.
 
 **MD::toHtml() itself has not been changed to actually call
 `MDHtml\Render()` yet** — that integration (making `kirigami/php-prepros`

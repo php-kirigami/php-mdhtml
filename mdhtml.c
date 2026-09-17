@@ -27,12 +27,24 @@
 /* ========================================================================
  * MODULE GLOBALS (type declared in php_mdhtml.h)
  *
- * `emoji_builtin` is populated once in MINIT and never touched again --
- * a straight C-array-to-HashTable copy of MD::$emojiMap (kirigami/php-prepros).
- * `emoji_custom` mirrors MD::$extraEmoji / MD::registerEmoji(): request-
- * scoped (RINIT/RSHUTDOWN), so registrations from one request never leak
- * into the next in a long-running SAPI. Looked up custom-first, exactly
- * like MD::emojiFor().
+ * All three tables are MINIT-initialized and MSHUTDOWN-destroyed --
+ * process-lifetime, not request-scoped. `emoji_builtin` is populated once
+ * and never touched again: a straight C-array-to-HashTable copy of
+ * MD::$emojiMap (kirigami/php-prepros). `emoji_custom` / `plugins` mirror
+ * MD::$extraEmoji/MD::registerEmoji() and MD::$plugins/MD::registerPlugin():
+ * PHP class statics, which persist for the life of the process/worker, not
+ * per-request -- so registrations made once (e.g. Kirigami's
+ * md.plugins.php, loaded once at boot) apply to every page rendered
+ * afterwards. An earlier version of this extension made emoji_custom/
+ * plugins RINIT/RSHUTDOWN-scoped instead, reasoning that a long-running
+ * SAPI shouldn't leak registrations between requests -- correct instinct
+ * for a generic PECL extension, but it broke exactly the usage pattern
+ * this extension exists to serve: kirigami/php-prepros renders every page
+ * of a site as a separate request against one long-lived php-wasm
+ * instance, registering plugins/emoji once up front. Fixed 2026-09-17
+ * (see CLAUDE.md) by matching MD::'s real persistence semantics instead of
+ * being more conservative than the class this extension is meant to
+ * replace. Both are looked up custom-first, exactly like MD::emojiFor().
  * ========================================================================
  */
 ZEND_DECLARE_MODULE_GLOBALS(mdhtml)
@@ -1917,9 +1929,10 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_mdhtml_register_emoji, 0, 2, IS_
 	ZEND_ARG_TYPE_INFO(0, char, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
-/* MDHtml\RegisterEmoji('shortcode', '<unicode char>') -- request-scoped,
- * mirrors MD::registerEmoji(). Overrides a builtin shortcode of the same
- * name for the rest of the request, same precedence as MD::emojiFor(). */
+/* MDHtml\RegisterEmoji('shortcode', '<unicode char>') -- mirrors
+ * MD::registerEmoji(). Overrides a builtin shortcode of the same name for
+ * the rest of the process (until unregistered or the process restarts),
+ * same precedence as MD::emojiFor(). */
 PHP_FUNCTION(mdhtml_register_emoji)
 {
 	zend_string *shortcode, *ch;
@@ -1942,11 +1955,12 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_mdhtml_register_plugin, 0, 2, IS
 	ZEND_ARG_TYPE_INFO(0, callback, IS_CALLABLE, 0)
 ZEND_END_ARG_INFO()
 
-/* MDHtml\RegisterPlugin('name', $callback) -- request-scoped, mirrors
- * MD::registerPlugin(). $callback is called as ($args, $body) exactly
- * like MD:: documents; stored as a plain zval (not a zend_fcall_info/
- * cache pair) so it can be looked up and invoked later, well after this
- * function's own call frame is gone. */
+/* MDHtml\RegisterPlugin('name', $callback) -- mirrors MD::registerPlugin().
+ * $callback is called as ($args, $body) exactly like MD:: documents;
+ * stored as a plain zval (not a zend_fcall_info/cache pair) so it can be
+ * looked up and invoked later, well after this function's own call frame
+ * -- and, per the MODULE GLOBALS comment above, well after the request
+ * that registered it -- is gone. */
 PHP_FUNCTION(mdhtml_register_plugin)
 {
 	zend_string *name;
@@ -2034,24 +2048,17 @@ PHP_MINIT_FUNCTION(mdhtml)
 		zend_hash_str_update_ptr(&MDHTML_G(emoji_builtin), php_mdhtml_builtin_emoji[i].name, strlen(php_mdhtml_builtin_emoji[i].name), val);
 	}
 
+	/* Process-lifetime, not request-scoped -- see the MODULE GLOBALS
+	 * comment above. */
+	zend_hash_init(&MDHTML_G(emoji_custom), 8, NULL, php_mdhtml_emoji_dtor, 1);
+	zend_hash_init(&MDHTML_G(plugins), 8, NULL, ZVAL_PTR_DTOR, 1);
+
 	return SUCCESS;
 }
 
 PHP_MSHUTDOWN_FUNCTION(mdhtml)
 {
 	zend_hash_destroy(&MDHTML_G(emoji_builtin));
-	return SUCCESS;
-}
-
-PHP_RINIT_FUNCTION(mdhtml)
-{
-	zend_hash_init(&MDHTML_G(emoji_custom), 8, NULL, php_mdhtml_emoji_dtor, 0);
-	zend_hash_init(&MDHTML_G(plugins), 8, NULL, ZVAL_PTR_DTOR, 0);
-	return SUCCESS;
-}
-
-PHP_RSHUTDOWN_FUNCTION(mdhtml)
-{
 	zend_hash_destroy(&MDHTML_G(emoji_custom));
 	zend_hash_destroy(&MDHTML_G(plugins));
 	return SUCCESS;
@@ -2085,8 +2092,8 @@ zend_module_entry mdhtml_module_entry = {
 	mdhtml_functions,
 	PHP_MINIT(mdhtml),
 	PHP_MSHUTDOWN(mdhtml),
-	PHP_RINIT(mdhtml),
-	PHP_RSHUTDOWN(mdhtml),
+	NULL, /* RINIT: nothing left to do, see the MODULE GLOBALS comment above */
+	NULL, /* RSHUTDOWN: ditto */
 	PHP_MINFO(mdhtml),
 	PHP_MDHTML_VERSION,
 	STANDARD_MODULE_PROPERTIES
