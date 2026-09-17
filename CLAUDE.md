@@ -445,6 +445,22 @@ much less fragile.
     - Full diff-test corpus (from point 11) re-run after all three — no
       regressions.
 
+14. **`config.w32` added for Windows/PECL build parity (2026-09-15,
+    requested while working on `php-jsonk`'s own build files in the same
+    session).** Mirrors `config.m4`'s `--with-mdhtml[=DIR]` semantics via
+    `ARG_WITH` + `CHECK_HEADER_ADD_INCLUDE`/`CHECK_LIB` (the config.w32
+    equivalents), following `ext/intl`'s own config.w32 as the reference
+    pattern for a C++-library-backed extension. **Not verified against a
+    real Windows PHP SDK build** (no such environment available in this
+    session) and, more importantly, **`vendor/build/stage.sh` doesn't
+    produce anything this can consume yet**: it cross-builds
+    `libcmark-gfm` via CMake+gcc under WSL, producing Unix `.a` static
+    archives, not MSVC-compatible `.lib` files. A real Windows build needs
+    its own staging step (CMake with a Visual Studio/MSVC generator) that
+    doesn't exist yet -- `config.w32` is written ahead of that so the
+    build-file shape is ready once someone does it, not because the
+    Windows build path is actually usable today.
+
 ## Relationship to other repos
 
 - **`php-wasm-compiler`** (github.com/php-kirigami/php-wasm-compiler,

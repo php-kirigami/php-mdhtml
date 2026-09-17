@@ -1,0 +1,19 @@
+// vim:ft=javascript
+
+ARG_WITH("mdhtml", "for mdhtml support (fast CommonMark + GFM rendering, built on cmark-gfm)", "no");
+
+if (PHP_MDHTML != "no") {
+	var mdhtml_dir = (PHP_MDHTML == "yes") ? "vendor/libcmark-gfm" : PHP_MDHTML;
+
+	if (CHECK_HEADER_ADD_INCLUDE("cmark-gfm.h", "CFLAGS_MDHTML", mdhtml_dir + "\\include") &&
+		CHECK_LIB("cmark-gfm.lib", "mdhtml", mdhtml_dir + "\\lib") &&
+		CHECK_LIB("cmark-gfm-extensions.lib", "mdhtml", mdhtml_dir + "\\lib")) {
+
+		EXTENSION("mdhtml", "mdhtml.c", PHP_MDHTML_SHARED);
+		AC_DEFINE('HAVE_MDHTML', 1, 'Whether you have mdhtml');
+	} else {
+		WARNING("mdhtml not enabled; libcmark-gfm not found at " + mdhtml_dir +
+			" -- vendor/build/stage.sh only produces Unix .a libraries via WSL/gcc+CMake today; " +
+			"a Windows (.lib-producing) staging script doesn't exist yet, see CLAUDE.md");
+	}
+}
