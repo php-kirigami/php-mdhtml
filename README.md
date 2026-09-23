@@ -73,20 +73,19 @@ need. `php-mdhtml` is a small extension written from scratch against
 `cmark-gfm` directly, with an idiomatic object model (in practice: no
 object model at all — see [API](#api)) instead of a hand-rolled one.
 
-See [CLAUDE.md](CLAUDE.md) for the full investigation and every decision
+See [docs/CONTEXT.md](docs/CONTEXT.md) for the full investigation and [docs/DECISIONS.md](docs/DECISIONS.md) for every decision
 made along the way.
 
 ---
 
 ## Status
 
-Native build only, works, diff-tested against `MD::toHtml()`'s real
-output. **Not yet wired into anything**: `kirigami/php-prepros`'s
-`MD::toHtml()` doesn't call `MDHtml\Render()` yet, and there's no
-Emscripten/WASM build yet (the eventual target — see
-[php-wasm-compiler](https://github.com/php-kirigami/php-wasm-compiler)).
-See [CLAUDE.md](CLAUDE.md)'s "Status" section for exactly what's done and
-what isn't.
+Builds natively and under Emscripten: statically linked into
+[`@kirigami/php-wasm`](https://github.com/php-kirigami/kirigami/tree/main/packages/php-wasm)
+by [php-wasm-compiler](https://github.com/php-kirigami/php-wasm-compiler),
+where `kirigami/php-prepros`'s `MD::toHtml()` delegates to it. See
+[docs/STATUS.md](docs/STATUS.md) for what's verified and
+[docs/TODO.md](docs/TODO.md) for known gaps.
 
 ---
 

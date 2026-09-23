@@ -39,7 +39,7 @@
  * registrations last for one request; kirigami/php-prepros re-registers
  * them on every request (md.plugins.php and the project's `includes` run
  * again for each page render, each one a separate php-wasm request).
- * v0.1.3 made them process-lifetime (CLAUDE.md, point 15): the tables then
+ * v0.1.3 made them process-lifetime (docs/DECISIONS.md, point 15): the tables then
  * kept dangling pointers into freed request memory, and the next request's
  * re-registration freed them a second time, corrupting the Zend heap
  * (zend_mm_panic after a few renders in one php-wasm instance). Reverted in
@@ -573,7 +573,7 @@ static void php_mdhtml_compute_heading_ids(cmark_node *doc, php_mdhtml_id_list *
  *  - task-list `<li>` gets `class="task-item"` and its checkbox's
  *    `checked=""`/`disabled=""` (cmark-gfm's HTML-boolean-attribute style)
  *    become bare `checked`/`disabled` (MD::'s style). NOT done here -- as
- *    a mostly-cosmetic gap, documented in CLAUDE.md -- is wrapping the
+ *    a mostly-cosmetic gap, documented in docs/DECISIONS.md -- is wrapping the
  *    *unordered list itself* in `class="task-list"`, since that would
  *    need lookahead/backpatching across the whole `<ul>...</ul>` this
  *    single forward pass doesn't do.

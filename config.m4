@@ -14,7 +14,7 @@ PHP_ARG_WITH([mdhtml],
 if test "$PHP_MDHTML" != "no"; then
   dnl Native dev convenience (bare --with-mdhtml / --enable-mdhtml-style
   dnl "yes"): use the local vendor/libcmark-gfm tree staged by
-  dnl vendor/build/stage.sh (see CLAUDE.md "Status", decision 5 option A)
+  dnl vendor/build/stage.sh (see docs/DECISIONS.md, decision 5 option A)
   dnl — not committed, rebuilt from source before every phpize build.
   dnl An explicit --with-mdhtml=DIR (e.g. php-wasm-compiler's /root/lib)
   dnl points at an externally-staged libcmark-gfm instead.
