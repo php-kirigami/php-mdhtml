@@ -556,6 +556,39 @@ much less fragile.
     holds, and this correction is the reason to trust before re-deriving
     the same wrong conclusion from the same test setup again.
 
+16. **`emoji_custom`/`plugins` back to request scope (`RINIT`/`RSHUTDOWN`,
+    non-persistent) in `v0.1.4` (2026-09-23) — point 15's change was
+    harmful, not neutral.** Point 15's correction kept the process-lifetime
+    tables as "not harmful". They were: `RegisterPlugin()` stores the
+    caller's request-allocated key (`zend_string_init(..., 0)`) and a
+    `ZVAL_COPY` of its Closure in a persistent table, and
+    `RegisterEmoji()` does the same with its key and string. When the
+    request ends, the engine frees that memory while the table still points
+    at it. The next request re-registers (php-prepros re-runs
+    `md.plugins.php` and the project's `includes` on every render), and
+    `zend_hash_update()` runs the destructor on the already-freed entry: a
+    double free that corrupts the Zend heap. In Kirigami this surfaced as
+    `RuntimeError: unreachable` / `zend_mm_panic` from `emalloc` a few
+    page renders into one php-wasm instance (`kiri serve`/`watch`, the
+    VS Code dev server), then "Cannot redeclare function" errors from the
+    half-dead runtime. Any project with a `md_register_plugin()` in its
+    `includes`, or rendering Markdown at all (`md.class.php` registers
+    the default plugins), was exposed.
+    **Fix**: the v0.1.2 lifecycle again — `zend_hash_init(..., 0)` in
+    `RINIT`, `zend_hash_destroy()` in `RSHUTDOWN`; `emoji_builtin` stays
+    `MINIT`/persistent (it only holds persistent strings). Registrations
+    last one request, exactly like the userland statics point 15's
+    correction showed php-wasm resets anyway, so nothing is lost.
+    **Verified natively** (Docker `php:8.5-cli`, cmark-gfm built from
+    `vendor/build/cmark-gfm.tar.gz`): one `php -S` process, 40 requests,
+    each registering a Closure plugin and an emoji, rendering with both,
+    then allocating 20,000 closures. `v0.1.3`: `GetRegisteredPlugins()`
+    grows by one per request (the dangling key no longer matches), then the
+    server segfaults — 1/40 requests OK. `v0.1.4`: 40/40 OK, one plugin
+    each time. Kirigami meanwhile empties the plugin table from a shutdown
+    function in php-prepros' `md.class.php` (harmless with `v0.1.4`), and
+    has a regression test (`packages/kirigami/test/md-plugin-repeat.test.js`).
+
 ## Relationship to other repos
 
 - **`php-wasm-compiler`** (github.com/php-kirigami/php-wasm-compiler,

@@ -115,7 +115,8 @@ escaped or stripped outright.
 ### `MDHtml\RegisterEmoji(string $shortcode, string $char): void`
 
 Registers (or overrides) a `:shortcode:` emoji for the rest of the
-process — persists across requests, matching `MD::registerEmoji()`. Over
+request, like a `MD::registerEmoji()` userland static. Register again in
+each request that renders it (Kirigami does, on every page). Over
 300 are built in already, ported from `MD::$emojiMap`.
 
 ```php
