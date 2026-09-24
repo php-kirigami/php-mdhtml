@@ -307,21 +307,19 @@ revisited. Written as the work happened: later points correct earlier ones
       correctly unwrapped (`<div class="checklist">...</div>`, no
       surrounding `<p>`), while an inline `{% codepen %}` used mid-sentence
       stays correctly inline inside its paragraph.
-    - **Known, deliberate limitation, unlike `MD::`**: a `{% %}` tag
-      written *inside* a code span/block in the source markdown is only
-      protected from being treated as a live plugin invocation for
-      ```` ``` ```` fenced blocks (tracked via a simple "does this line
-      start with ```` ``` ````" toggle maintained during the same scan).
-      A single-backtick inline code span containing literal `{% %}` text
-      is **not** currently excluded and would still fire the plugin.
-      `MD::` protects against this unconditionally (it extracts first,
-      then swaps back to literal text if the placeholder later turns out
-      to have landed inside extracted code). Verified the fenced-block
-      case works (`` ``` \n{% codepen abc %}\n``` `` renders the tag
-      literally, `{% codepen abc %}` used for real right after still
-      renders the plugin) — the inline-span gap is undocumented-but-real,
-      revisit if it matters in practice (e.g. documentation *about* the
-      plugin syntax written in a single-backtick span).
+    - **Tags inside code** (fixed in `v0.1.5`, 2026-09-23): the scan
+      only skips ```` ``` ```` fenced blocks, so until 0.1.5 a tag inside
+      an inline code span or an indented code block fired the plugin and
+      its output replaced the code (Kirigami's `template-default` showed
+      `` `{% lead %}` `` as an empty `<code></code>`). Like `MD::`, which
+      extracts first and swaps the literal tag back into any code the
+      placeholder lands in, each placeholder now also keeps its tag's
+      source, escaped as cmark escapes code text (`&`, `<`, `>`, `"`), and
+      `php_mdhtml_inject_plugins()` (now one pass over the HTML) emits that
+      source instead of the output when the placeholder sits between a
+      `<code>` and `</code>`. Tracking the tags in the rendered HTML is
+      reliable because cmark escapes `<` in text. As in `MD::`, the
+      callback still runs for such a tag; only its output is discarded.
     - Verified end-to-end with inline usage embedded mid-sentence, a
       multi-line block usage, an unregistered name (stays literal),
       `GetRegisteredPlugins()` before/after `UnregisterPlugin()`, and the

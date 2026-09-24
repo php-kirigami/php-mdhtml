@@ -1540,19 +1540,20 @@ static zend_string *php_mdhtml_process_definition_lists(zend_string *html) {
  * around. After rendering, php_mdhtml_inject_plugins() swaps each
  * placeholder for its real output.
  *
- * KNOWN LIMITATION (unlike MD::, which explicitly protects against this):
- * a `{% %}` tag written *inside* a code span/block in the source is not
- * detected as such here except for ``` fenced blocks (tracked via a
- * simple "does this line start with ```" toggle) -- an inline single-
- * backtick code span containing literal `{% %}` text is not excluded and
- * would still be treated as a live plugin invocation. Revisit if this
- * turns out to matter in practice (documenting Kirigami's own plugin
- * syntax in a single-backtick code span, for instance).
+ * Tags inside code: the scan only skips ``` fenced blocks (a simple "does
+ * this line start with ```" toggle), so a tag inside a code span or an
+ * indented code block still becomes a placeholder. Like MD::, each
+ * placeholder also keeps the tag's escaped source, and
+ * php_mdhtml_inject_plugins() puts that back instead of the plugin's
+ * output when the placeholder lands inside a rendered <code> element, so
+ * code shows `{% tag %}` verbatim. As in MD::, the plugin callback has
+ * still run for such a tag.
  * ======================================================================== */
 
 typedef struct {
 	zend_string *placeholder;
 	zend_string *output;
+	zend_string *literal;
 } php_mdhtml_plugin_output;
 
 typedef struct {
@@ -1561,13 +1562,14 @@ typedef struct {
 	size_t capacity;
 } php_mdhtml_plugin_outputs;
 
-static void php_mdhtml_plugin_outputs_push(php_mdhtml_plugin_outputs *list, zend_string *placeholder, zend_string *output) {
+static void php_mdhtml_plugin_outputs_push(php_mdhtml_plugin_outputs *list, zend_string *placeholder, zend_string *output, zend_string *literal) {
 	if (list->count == list->capacity) {
 		list->capacity = list->capacity ? list->capacity * 2 : 8;
 		list->items = erealloc(list->items, list->capacity * sizeof(php_mdhtml_plugin_output));
 	}
 	list->items[list->count].placeholder = placeholder;
 	list->items[list->count].output = output;
+	list->items[list->count].literal = literal;
 	list->count++;
 }
 
@@ -1576,6 +1578,7 @@ static void php_mdhtml_plugin_outputs_destroy(php_mdhtml_plugin_outputs *list) {
 	for (i = 0; i < list->count; i++) {
 		zend_string_release(list->items[i].placeholder);
 		zend_string_release(list->items[i].output);
+		zend_string_release(list->items[i].literal);
 	}
 	if (list->items) {
 		efree(list->items);
@@ -1616,6 +1619,23 @@ static void php_mdhtml_parse_plugin_args(const char *raw, size_t len, zval *args
 			add_next_index_stringl(args_array, raw + start, i - start);
 		}
 	}
+}
+
+/* Escapes a tag's source the way cmark escapes code text (&, <, >, "). */
+static zend_string *php_mdhtml_escape_code_text(const char *s, size_t len) {
+	smart_str out = {0};
+	size_t i;
+	for (i = 0; i < len; i++) {
+		switch (s[i]) {
+			case '&': smart_str_appends(&out, "&amp;"); break;
+			case '<': smart_str_appends(&out, "&lt;"); break;
+			case '>': smart_str_appends(&out, "&gt;"); break;
+			case '"': smart_str_appends(&out, "&quot;"); break;
+			default: smart_str_appendc(&out, s[i]);
+		}
+	}
+	smart_str_0(&out);
+	return out.s ? out.s : ZSTR_EMPTY_ALLOC();
 }
 
 static size_t php_mdhtml_trim_len(const char *s, size_t len) {
@@ -1727,15 +1747,16 @@ static zend_string *php_mdhtml_extract_plugins(const char *md, size_t len, php_m
 								placeholder = ph.s;
 
 								smart_str_append(&out, placeholder);
-								php_mdhtml_plugin_outputs_push(outputs, zend_string_copy(placeholder), output);
+								php_mdhtml_plugin_outputs_push(outputs, placeholder, output,
+									php_mdhtml_escape_code_text(md + i, match_end - i));
 							}
 							zval_ptr_dtor(&retval);
 							zval_ptr_dtor(&args_array);
 							zval_ptr_dtor(&body_zv);
 
 							/* re-derive line_start/in_fence across the
-							 * consumed span (best-effort -- see the
-							 * KNOWN LIMITATION note above the section). */
+							 * consumed span (best-effort -- see the note
+							 * on tags inside code above the section). */
 							for (j = i; j < match_end; j++) {
 								if (md[j] == '\n') line_start = j + 1;
 							}
@@ -1768,55 +1789,57 @@ static zend_string *php_mdhtml_extract_plugins(const char *md, size_t len, php_m
 }
 
 /* Substitutes each plugin placeholder for its real output in the final
- * rendered HTML. A placeholder that ended up alone inside its own
- * `<p>...</p>` (the common case for a block-style plugin used on its own
- * line) has that wrapping `<p>`/`</p>` removed first -- otherwise a
- * plugin returning block-level HTML (a `<div>`, an `<iframe>`, ...) would
- * end up illegally nested inside a `<p>`, exactly the case MD::'s own
- * STEP 13 paragraph-wrapping logic special-cases its `\x02PLG` marker
- * for. */
+ * rendered HTML, in one pass. A placeholder inside a <code> element gets
+ * the tag's escaped source instead, so code shows the tag verbatim. A
+ * placeholder that ended up alone inside its own `<p>...</p>` (the common
+ * case for a block-style plugin used on its own line) has that wrapping
+ * `<p>`/`</p>` removed first -- otherwise a plugin returning block-level
+ * HTML (a `<div>`, an `<iframe>`, ...) would end up illegally nested
+ * inside a `<p>`, exactly the case MD::'s own STEP 13 paragraph-wrapping
+ * logic special-cases its `\x02PLG` marker for. cmark escapes '<' in text,
+ * so every "<code" / "</code>" seen here is a real tag. */
 static zend_string *php_mdhtml_inject_plugins(zend_string *html, php_mdhtml_plugin_outputs *outputs) {
-	zend_string *current = zend_string_copy(html);
-	size_t i;
+	smart_str out = {0};
+	const char *s = ZSTR_VAL(html);
+	size_t len = ZSTR_LEN(html);
+	size_t pos = 0;
+	int in_code = 0;
 
-	for (i = 0; i < outputs->count; i++) {
-		zend_string *placeholder = outputs->items[i].placeholder;
-		zend_string *output = outputs->items[i].output;
-		smart_str out = {0};
-		const char *s = ZSTR_VAL(current);
-		size_t len = ZSTR_LEN(current);
-		size_t plen = ZSTR_LEN(placeholder);
-		size_t pos = 0;
-		int found_any = 0;
-
-		while (pos < len) {
-			if (pos + plen <= len && memcmp(s + pos, ZSTR_VAL(placeholder), plen) == 0) {
-				if (out.s && ZSTR_LEN(out.s) >= 3 && memcmp(ZSTR_VAL(out.s) + ZSTR_LEN(out.s) - 3, "<p>", 3) == 0
-					&& pos + plen + 4 <= len && memcmp(s + pos + plen, "</p>", 4) == 0) {
+	while (pos < len) {
+		if (s[pos] == '<') {
+			if (pos + 5 < len && memcmp(s + pos, "<code", 5) == 0 && (s[pos + 5] == '>' || s[pos + 5] == ' ')) {
+				in_code = 1;
+			} else if (pos + 7 <= len && memcmp(s + pos, "</code>", 7) == 0) {
+				in_code = 0;
+			}
+		} else if (s[pos] == '\x02' && pos + 4 < len && memcmp(s + pos + 1, "PLG", 3) == 0) {
+			size_t p = pos + 4, n = 0;
+			while (p < len && s[p] >= '0' && s[p] <= '9') {
+				n = n * 10 + (size_t) (s[p] - '0');
+				p++;
+			}
+			if (p > pos + 4 && p < len && s[p] == '\x03' && n < outputs->count) {
+				size_t end = p + 1;
+				if (in_code) {
+					smart_str_append(&out, outputs->items[n].literal);
+				} else if (out.s && ZSTR_LEN(out.s) >= 3 && memcmp(ZSTR_VAL(out.s) + ZSTR_LEN(out.s) - 3, "<p>", 3) == 0
+					&& end + 4 <= len && memcmp(s + end, "</p>", 4) == 0) {
 					ZSTR_LEN(out.s) -= 3; /* drop the "<p>" we already wrote */
-					smart_str_append(&out, output);
-					pos += plen + 4; /* also skip the matching "</p>" */
+					smart_str_append(&out, outputs->items[n].output);
+					end += 4; /* also skip the matching "</p>" */
 				} else {
-					smart_str_append(&out, output);
-					pos += plen;
+					smart_str_append(&out, outputs->items[n].output);
 				}
-				found_any = 1;
+				pos = end;
 				continue;
 			}
-			smart_str_appendc(&out, s[pos]);
-			pos++;
 		}
-
-		if (found_any) {
-			smart_str_0(&out);
-			zend_string_release(current);
-			current = out.s;
-		} else {
-			smart_str_free(&out);
-		}
+		smart_str_appendc(&out, s[pos]);
+		pos++;
 	}
 
-	return current;
+	smart_str_0(&out);
+	return out.s ? out.s : ZSTR_EMPTY_ALLOC();
 }
 
 /* ========================================================================

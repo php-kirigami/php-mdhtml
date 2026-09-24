@@ -1,10 +1,12 @@
 # Status
 
-## Current state (2026-09-23, version 0.1.4)
+## Current state (2026-09-23, version 0.1.5)
 
 - Statically linked into `@kirigami/php-wasm` by `php-wasm-compiler`
   (`mdhtml: { mode: static }`), and `kirigami/php-prepros`'s `MD::toHtml()`
   delegates to it; the old pure-PHP renderer is kept there as `MD_LEGACY`.
+- 0.1.5 renders a `{% plugin %}` tag inside inline code or an indented
+  code block as literal text instead of the plugin's output (point 12).
 - 0.1.4 made the emoji/plugin tables request-scoped again (point 16): the
   0.1.3 process-lifetime tables double-freed request-allocated Closures and
   crashed PHP-WASM after a few renders.
